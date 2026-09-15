@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Um Jogo da Velha moderno e interativo.">
+    <link rel="stylesheet" href="style.css">
+    <title>Jogo da Velha Multiplayer</title>
+</head>
+<body>
+    <main class="sect-box">
+        <header>Jogo da Velha Online</header>
+        
+        <!-- Tela de conexão/espera -->
+        <div class="content" id="selection-screen">
+            <div class="title" id="connection-status">Conectando ao servidor...</div>
+            <div class="option hidden" id="waiting-spinner"> 
+                <p>Por favor aguarde um oponente.</p>
+            </div>
+        </div>
+
+        <!-- Tela do jogo -->
+        <div class="game-content hidden" id="game-screen">
+            <div class="score-board">
+                <div class="round-display">Rodada: <span id="round-number">1</span></div>
+                <div class="scores">
+                    <div class="score-item x-score">Vitórias X: <strong id="score-x">0</strong></div>
+                    <div class="score-item draw-score">Empates: <strong id="score-draw">0</strong></div>
+                    <div class="score-item o-score">Vitórias O: <strong id="score-o">0</strong></div>
+                </div>
+            </div>
+
+            <div class="status-board">
+                <span class="active-player" id="turn-indicator">Vez do Jogador: <strong id="current-player">X</strong></span>
+                <div style="font-size: 0.9rem; margin-top: 5px; color: var(--text-muted)">
+                    Você é: <strong id="my-role"></strong>
+                </div>
+            </div>
+            
+            <div class="board" id="board">
+                <div class="cell" data-index="0"></div>
+                <div class="cell" data-index="1"></div>
+                <div class="cell" data-index="2"></div>
+                <div class="cell" data-index="3"></div>
+                <div class="cell" data-index="4"></div>
+                <div class="cell" data-index="5"></div>
+                <div class="cell" data-index="6"></div>
+                <div class="cell" data-index="7"></div>
+                <div class="cell" data-index="8"></div>
+            </div>
+        </div>
+        
+        <!-- Tela de resultado -->
+        <div class="result-screen hidden" id="result-screen">
+            <div class="result-message" id="result-message">Vitória do X!</div>
+            <button class="restart-btn" id="new-game-btn">Pedir Revanche</button>
+        </div>
+    </main>
+
+    <!-- Cliente Socket.io -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
