@@ -8,8 +8,8 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Serve arquivos estáticos da pasta atual
-app.use(express.static(__dirname));
+// Serve arquivos estáticos da pasta public
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Gerencia salas para permitir múltiplos jogos simultâneos
 let rooms = {};
