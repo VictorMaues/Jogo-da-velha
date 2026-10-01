@@ -1,338 +1,385 @@
-const Engine = Matter.Engine,
-      Runner = Matter.Runner,
-      Bodies = Matter.Bodies,
-      Composite = Matter.Composite,
-      Constraint = Matter.Constraint,
-      Events = Matter.Events,
-      Body = Matter.Body;
+/* ============================================================
+   PINBALL ARCADE NEON — script.js
+   Abordagem cinemática para flippers: Body.setAngle() direto,
+   sem depender de torque/velocidade angular (método mais estável).
+   ============================================================ */
 
-const WIDTH = 600;
-const HEIGHT = 800;
+// ── API Matter.js ─────────────────────────────────────────────
+const { Engine, Runner, Bodies, Composite, Constraint, Events, Body } = Matter;
 
-// Configuração do Canvas para Custom Render
+// ── Canvas ────────────────────────────────────────────────────
+const W = 600, H = 800;
 const canvas = document.getElementById('pinball-canvas');
-canvas.width = WIDTH;
-canvas.height = HEIGHT;
+canvas.width  = W;
+canvas.height = H;
 const ctx = canvas.getContext('2d');
 
-let score = 0;
-const scoreElement = document.getElementById('score-value');
+// ── Estado do jogo ────────────────────────────────────────────
+let score      = 0;
+let lives      = 3;
+let gameOver   = false;
+let charging   = false;
+let power      = 0;   // 0..1
 
-// Motor físico
+const scoreEl = document.getElementById('score-value');
+function updateScore(n) { score = n; scoreEl.textContent = score.toString().padStart(6,'0'); }
+updateScore(0);
+
+// ── Motor Físico ──────────────────────────────────────────────
 const engine = Engine.create();
-// Reduzir um pouco a gravidade para um jogo mais fluido
-engine.gravity.y = 1.2;
+engine.gravity.y = 1.8;
 const world = engine.world;
 
-// Executor físico (update loop do matter)
-const runner = Runner.create();
-Runner.run(runner, engine);
+Runner.run(Runner.create(), engine);
 
-const GROUP_FLIPPER = Body.nextGroup(true);
-
-// Cores Neon
-const COLORS = {
-    wall: '#111122',
-    wallGlow: '#00ffff',
-    bumper1: '#ff007f',
-    bumper2: '#00ffff',
-    bumper3: '#ffea00',
-    flipper: '#00ffcc',
-    ball: '#ffffff',
-    ballGlow: '#ffffff'
+// ── Cores ─────────────────────────────────────────────────────
+const C = {
+  bg:      '#0a0a16',
+  wall:    '#00ffff',
+  flipper: '#00ffcc',
+  ball:    '#ffffff',
+  trail:   '#88bbff',
+  b1:      '#ff007f',
+  b2:      '#00ffff',
+  b3:      '#ffea00',
 };
 
-// --- Estrutura da Mesa ---
+// ── Helpers de corpo estático ─────────────────────────────────
+function sRect(x, y, w, h, angle = 0, extra = {}) {
+  return Bodies.rectangle(x, y, w, h, {
+    isStatic: true, friction: 0.05, restitution: 0.4,
+    angle, label: 'wall', ...extra
+  });
+}
 
-// Bordas invisíveis / visíveis
-const wallOptions = { isStatic: true, label: 'wall', friction: 0.1, restitution: 0.2 };
+// ── Paredes externas (grossas → sem tunelamento) ──────────────
+const LANE_X = W - 45; // divisória da calha do lançador
+const LANE_MID_X = (LANE_X + W) / 2; // centro horizontal da calha
+const LANE_FLOOR_Y = H - 35; // piso da calha onde a bola repousa
+
 const walls = [
-    Bodies.rectangle(WIDTH / 2, -25, WIDTH, 50, wallOptions), // Topo
-    Bodies.rectangle(-25, HEIGHT / 2, 50, HEIGHT, wallOptions), // Esquerda
-    Bodies.rectangle(WIDTH + 25, HEIGHT / 2, 50, HEIGHT, wallOptions), // Direita
-    // Curvas Superiores
-    Bodies.rectangle(60, 60, 200, 30, { ...wallOptions, angle: Math.PI / 4 }),
-    Bodies.rectangle(WIDTH - 60, 60, 200, 30, { ...wallOptions, angle: -Math.PI / 4 }),
-    // Rampas inferiores (levando aos flippers)
-    Bodies.rectangle(110, HEIGHT - 180, 280, 20, { ...wallOptions, angle: Math.PI / 5.5 }),
-    Bodies.rectangle(WIDTH - 110, HEIGHT - 180, 280, 20, { ...wallOptions, angle: -Math.PI / 5.5 }),
-    // Corredor do Lançador (Plunger)
-    Bodies.rectangle(WIDTH - 40, HEIGHT - 350, 10, 700, wallOptions)
+  sRect(W/2,  -50,  W+400, 100),           // topo
+  sRect(-55,  H/2,  110,   H+400),          // esquerda
+  sRect(W+55, H/2,  110,   H+400),          // direita
+
+  // deflectores diagonais superiores
+  sRect(80,   80,   230,   28,  Math.PI/4),
+  sRect(W-80, 80,   230,   28, -Math.PI/4),
+
+  // rampas inferiores (guiam para os flippers)
+  sRect(90,    H-170, 290, 26,  Math.PI/5.5),
+  sRect(W-90,  H-170, 290, 26, -Math.PI/5.5),
+
+  // Divisória da calha — CURTA: vai de Y=120 até o fundo.
+  // Isso deixa abertura no TOPO para a bola sair para o campo.
+  sRect(LANE_X, (H + 120) / 2, 14, H - 120),
+
+  // Piso da calha — ESTREITO: apenas dentro do corredor do lançador.
+  sRect(LANE_MID_X, LANE_FLOOR_Y, W - LANE_X - 14, 14),
 ];
 Composite.add(world, walls);
 
-// --- Bumpers ---
-const bumpers = [
-    createBumper(WIDTH / 2, 180, 35, COLORS.bumper1),
-    createBumper(WIDTH / 2 - 80, 280, 30, COLORS.bumper2),
-    createBumper(WIDTH / 2 + 80, 280, 30, COLORS.bumper2),
-    createBumper(WIDTH / 2, 400, 40, COLORS.bumper3)
+// ── Bumpers ───────────────────────────────────────────────────
+const bumperData = [
+  { x: W/2,      y: 175, r: 30, color: C.b1 },
+  { x: W/2 - 88, y: 275, r: 26, color: C.b2 },
+  { x: W/2 + 88, y: 275, r: 26, color: C.b2 },
+  { x: W/2,      y: 380, r: 34, color: C.b3 },
 ];
 
-function createBumper(x, y, radius, color) {
-    return Bodies.circle(x, y, radius, {
-        isStatic: true,
-        restitution: 1.5,
-        label: 'bumper',
-        plugin: { color: color, hitRadius: radius } // Custom data for rendering
-    });
-}
+const bumpers = bumperData.map(d =>
+  Bodies.circle(d.x, d.y, d.r, {
+    isStatic: true, restitution: 2.0, friction: 0,
+    label: 'bumper', plugin: { color: d.color, hit: 0 }
+  })
+);
 Composite.add(world, bumpers);
 
-// --- Flippers ---
-const flipperWidth = 110;
-const flipperHeight = 18;
-const flipperY = HEIGHT - 120;
-const flipperGap = 90;
+// ── Flippers (cinemáticos) ────────────────────────────────────
+// Usamos corpos estáticos controlados manualmente por setAngle.
+// Isso evita TODOS os bugs de velocidade angular e de grupo de colisão.
 
-const flipperLeft = Bodies.rectangle(WIDTH/2 - flipperGap, flipperY, flipperWidth, flipperHeight, {
-    collisionFilter: { group: GROUP_FLIPPER },
-    density: 0.05,
-    restitution: 0.2,
-    friction: 0.1,
-    label: 'flipper'
+const FW = 110, FH = 16;
+const FY  = H - 118;
+const GAP = 82;  // distância do centro para cada flipper
+
+// Ângulos em repouso e levantado
+const FL_REST = 0.45;   // descansando: ponta direita baixa
+const FL_UP   = -0.45;  // levantado:   ponta direita sobe
+
+const FR_REST = -0.45;  // descansando: ponta esquerda baixa
+const FR_UP   =  0.45;  // levantado:   ponta esquerda sobe
+
+// Pinos de articulação (mundiais)
+const HL = { x: W/2 - GAP - FW/2 + 10, y: FY }; // hinge esquerdo
+const HR = { x: W/2 + GAP + FW/2 - 10, y: FY }; // hinge direito
+
+// Posição inicial dos centros dos flippers
+const FL_CX = HL.x + FW/2 - 10;
+const FR_CX = HR.x - FW/2 + 10;
+
+const flipL = Bodies.rectangle(FL_CX, FY, FW, FH, {
+  isStatic: true, label: 'flipper',
+  friction: 0.05, restitution: 0.25,
+  collisionFilter: { category: 0x0002, mask: 0x0001 }
+});
+const flipR = Bodies.rectangle(FR_CX, FY, FW, FH, {
+  isStatic: true, label: 'flipper',
+  friction: 0.05, restitution: 0.25,
+  collisionFilter: { category: 0x0002, mask: 0x0001 }
 });
 
-const hingeLeft = Constraint.create({
-    pointA: { x: WIDTH/2 - flipperGap - flipperWidth/2 + 10, y: flipperY },
-    bodyB: flipperLeft,
-    pointB: { x: -flipperWidth/2 + 10, y: 0 },
-    stiffness: 1,
-    length: 0
-});
+Body.setAngle(flipL, FL_REST);
+Body.setAngle(flipR, FR_REST);
 
-const flipperRight = Bodies.rectangle(WIDTH/2 + flipperGap, flipperY, flipperWidth, flipperHeight, {
-    collisionFilter: { group: GROUP_FLIPPER },
-    density: 0.05,
-    restitution: 0.2,
-    friction: 0.1,
-    label: 'flipper'
-});
+Composite.add(world, [flipL, flipR]);
 
-const hingeRight = Constraint.create({
-    pointA: { x: WIDTH/2 + flipperGap + flipperWidth/2 - 10, y: flipperY },
-    bodyB: flipperRight,
-    pointB: { x: flipperWidth/2 - 10, y: 0 },
-    stiffness: 1,
-    length: 0
-});
+// Animação suave dos ângulos
+let angleL = FL_REST;
+let angleR = FR_REST;
+const FLIP_SPEED = 0.12; // interpolação por frame
 
-Composite.add(world, [flipperLeft, hingeLeft, flipperRight, hingeRight]);
+// ── Bola ──────────────────────────────────────────────────────
+let ball, trail = [];
 
-// --- Bola ---
-let ball;
-let ballParticles = []; // Para o efeito de rastro
-function createBall() {
-    if (ball) Composite.remove(world, ball);
-    ball = Bodies.circle(WIDTH - 15, HEIGHT - 50, 12, {
-        restitution: 0.6,
-        friction: 0.001,
-        density: 0.06,
-        label: 'ball'
-    });
-    ballParticles = [];
-    Composite.add(world, ball);
+function spawnBall() {
+  if (ball) Composite.remove(world, ball);
+  // Bola repousa sobre o piso da calha (LANE_FLOOR_Y - raio - metade do piso)
+  ball = Bodies.circle(W - 23, LANE_FLOOR_Y - 20, 11, {
+    restitution: 0.7, friction: 0.003, frictionAir: 0.003,
+    density: 0.05, label: 'ball', isBullet: true,
+    collisionFilter: { category: 0x0001, mask: 0xFFFF }
+  });
+  Composite.add(world, ball);
+  trail    = [];
+  charging = false;
+  power    = 0;
 }
-createBall();
+spawnBall();
 
-// --- Controles e Lógica ---
-const keys = { ArrowLeft: false, ArrowRight: false };
+// ── Controles ─────────────────────────────────────────────────
+const keys = { left: false, right: false };
 
-document.addEventListener('keydown', (e) => {
-    if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.ArrowLeft = true;
-    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.ArrowRight = true;
-    
-    // Lançador - Pressionar espaço
-    if (e.code === 'Space') {
-        // Verifica se a bola está na calha do lançador
-        if (ball.position.x > WIDTH - 50 && ball.position.y > HEIGHT - 200) {
-            // Aplica uma força impulsiva para cima
-            Body.applyForce(ball, ball.position, { x: 0, y: -0.15 });
-        }
-    }
+document.addEventListener('keydown', e => {
+  if (['Space','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.code))
+    e.preventDefault();
+
+  if (gameOver) return;
+
+  if (e.code === 'ArrowLeft'  || e.code === 'KeyA') keys.left  = true;
+  if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
+
+  // Inicia carregamento se a bola estiver na calha (sem checar velocidade —
+  // bola pode ter pequena oscilação sobre o piso)
+  if (e.code === 'Space' && !e.repeat && !charging) {
+    const inLane = ball.position.x > LANE_X - 30 && ball.position.y > H - 300;
+    if (inLane) { charging = true; power = 0; }
+  }
 });
 
-document.addEventListener('keyup', (e) => {
-    if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.ArrowLeft = false;
-    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.ArrowRight = false;
+document.addEventListener('keyup', e => {
+  if (e.code === 'ArrowLeft'  || e.code === 'KeyA') keys.left  = false;
+  if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
+
+  if (e.code === 'Space' && charging) {
+    charging = false;
+    // Lança usando setVelocity — direto e confiável
+    const speed = 8 + power * 22; // px/frame: mínimo 8, máximo 30
+    Body.setVelocity(ball, { x: 0, y: -speed });
+    power = 0;
+  }
 });
 
-// Update dos Flippers
-Events.on(engine, 'beforeUpdate', function() {
-    const MAX_ANGLE = 0.6; // ~35 graus
-    const FLIPPER_SPEED = 0.4;
-    
-    // Flipper Esquerdo
-    if (keys.ArrowLeft) {
-        // Rotacionar para cima
-        if (flipperLeft.angle > -MAX_ANGLE) {
-            Body.setAngularVelocity(flipperLeft, -FLIPPER_SPEED);
-        } else {
-            Body.setAngle(flipperLeft, -MAX_ANGLE);
-            Body.setAngularVelocity(flipperLeft, 0);
-        }
-    } else {
-        // Cair / voltar à posição normal
-        if (flipperLeft.angle < MAX_ANGLE) {
-            Body.setAngularVelocity(flipperLeft, FLIPPER_SPEED * 0.4);
-        } else {
-            Body.setAngle(flipperLeft, MAX_ANGLE);
-            Body.setAngularVelocity(flipperLeft, 0);
-        }
-    }
-
-    // Flipper Direito
-    if (keys.ArrowRight) {
-        if (flipperRight.angle < MAX_ANGLE) {
-            Body.setAngularVelocity(flipperRight, FLIPPER_SPEED);
-        } else {
-            Body.setAngle(flipperRight, MAX_ANGLE);
-            Body.setAngularVelocity(flipperRight, 0);
-        }
-    } else {
-        if (flipperRight.angle > -MAX_ANGLE) {
-            Body.setAngularVelocity(flipperRight, -FLIPPER_SPEED * 0.4);
-        } else {
-            Body.setAngle(flipperRight, -MAX_ANGLE);
-            Body.setAngularVelocity(flipperRight, 0);
-        }
-    }
-
-    // Reset da bola se cair
-    if (ball.position.y > HEIGHT + 50) {
-        createBall();
-    }
-    
-    // Atualizar rastro
-    if(ball.speed > 2) {
-        ballParticles.push({ x: ball.position.x, y: ball.position.y, alpha: 1 });
-    }
-    for (let i = 0; i < ballParticles.length; i++) {
-        ballParticles[i].alpha -= 0.05;
-        if (ballParticles[i].alpha <= 0) {
-            ballParticles.splice(i, 1);
-            i--;
-        }
-    }
+window.addEventListener('blur', () => {
+  keys.left = keys.right = false;
+  charging  = false;
 });
 
-// Colisões (Score e Efeitos)
-Events.on(engine, 'collisionStart', function(event) {
-    const pairs = event.pairs;
-    for (let i = 0; i < pairs.length; i++) {
-        const pair = pairs[i];
-        if (pair.bodyA.label === 'bumper' || pair.bodyB.label === 'bumper') {
-            score += 250;
-            scoreElement.textContent = score;
-            const bumper = pair.bodyA.label === 'bumper' ? pair.bodyA : pair.bodyB;
-            
-            // Efeito de Hit
-            bumper.plugin.hitRadius = bumper.circleRadius * 1.3;
-        }
+// ── Loop de atualização ───────────────────────────────────────
+Events.on(engine, 'beforeUpdate', () => {
+  if (gameOver) return;
+
+  // Carrega power
+  if (charging) power = Math.min(1, power + 0.018);
+
+  // Interpola ângulos dos flippers e reposiciona (cinemático)
+  const targetL = keys.left  ? FL_UP   : FL_REST;
+  const targetR = keys.right ? FR_UP   : FR_REST;
+
+  angleL += (targetL - angleL) * FLIP_SPEED;
+  angleR += (targetR - angleR) * FLIP_SPEED;
+
+  // Reposicionar ao redor do pino, depois aplicar ângulo
+  setFlipperPose(flipL, HL, angleL,  1);  // 1 = hinge na esquerda
+  setFlipperPose(flipR, HR, angleR, -1);  // -1 = hinge na direita
+
+  // Rastro
+  if (ball.speed > 1.5) {
+    trail.push({ x: ball.position.x, y: ball.position.y, a: 0.7 });
+    if (trail.length > 25) trail.shift();
+  }
+  for (let i = trail.length - 1; i >= 0; i--) {
+    trail[i].a -= 0.055;
+    if (trail[i].a <= 0) trail.splice(i, 1);
+  }
+
+  // Bola caiu
+  if (ball.position.y > H + 60) {
+    lives--;
+    if (lives <= 0) { gameOver = true; }
+    else            { spawnBall(); }
+  }
+});
+
+// Posiciona flipper em torno do seu pino de articulação
+// side: +1 = pino na extremidade ESQUERDA (centro fica à DIREITA do pino)
+//       -1 = pino na extremidade DIREITA  (centro fica à ESQUERDA do pino)
+function setFlipperPose(body, hinge, angle, side) {
+  const offset = side * (FW / 2 - 10);
+  // Centro do corpo = pino + offset rotacionado pelo ângulo
+  const cx = hinge.x + offset * Math.cos(angle);
+  const cy = hinge.y + offset * Math.sin(angle);
+  Body.setPosition(body, { x: cx, y: cy });
+  Body.setAngle(body, angle);
+}
+
+// ── Colisões ──────────────────────────────────────────────────
+Events.on(engine, 'collisionStart', ev => {
+  for (const p of ev.pairs) {
+    const isB = lbl => p.bodyA.label === lbl || p.bodyB.label === lbl;
+    if (isB('bumper')) {
+      const b = p.bodyA.label === 'bumper' ? p.bodyA : p.bodyB;
+      updateScore(score + 250);
+      b.plugin.hit = 10;
     }
+  }
 });
 
-// Animação de volta do raio do bumper
-Events.on(engine, 'afterUpdate', function() {
-    bumpers.forEach(b => {
-        if (b.plugin.hitRadius > b.circleRadius) {
-            b.plugin.hitRadius -= 0.5;
-        }
-    });
+Events.on(engine, 'afterUpdate', () => {
+  for (const b of bumpers) if (b.plugin.hit > 0) b.plugin.hit--;
 });
 
-// --- Custom Render Loop ---
-function drawBody(body, color, glow = false) {
+// ── Render ────────────────────────────────────────────────────
+function poly(body, fill, stroke, glow = 0) {
+  ctx.beginPath();
+  const v = body.vertices;
+  ctx.moveTo(v[0].x, v[0].y);
+  for (let i = 1; i < v.length; i++) ctx.lineTo(v[i].x, v[i].y);
+  ctx.closePath();
+  ctx.shadowBlur  = glow;
+  ctx.shadowColor = stroke;
+  ctx.fillStyle   = fill;
+  ctx.fill();
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth   = 2;
+  ctx.stroke();
+  ctx.shadowBlur  = 0;
+}
+
+function circle(x, y, r, fill, stroke, glow = 0) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.shadowBlur  = glow;
+  ctx.shadowColor = stroke;
+  ctx.fillStyle   = fill;
+  ctx.fill();
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth   = 2;
+  ctx.stroke();
+  ctx.shadowBlur  = 0;
+}
+
+function drawHUD() {
+  // ── Vidas ──
+  for (let i = 0; i < lives; i++) {
+    circle(20 + i * 22, H - 20, 8, C.ball, C.trail, 10);
+  }
+
+  // ── Barra de potência ──
+  const bx = W - 22, by = H - 15, bh = 100;
+  // trilho
+  ctx.beginPath();
+  ctx.moveTo(bx, by); ctx.lineTo(bx, by - bh);
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth   = 12; ctx.lineCap = 'round'; ctx.stroke();
+
+  if (power > 0) {
+    const fill = bh * power;
+    const r = Math.round(255 * power);
+    const g = Math.round(180 * (1 - power));
+    const col = `rgb(${r},${g},40)`;
     ctx.beginPath();
-    const vertices = body.vertices;
-    ctx.moveTo(vertices[0].x, vertices[0].y);
-    for (let j = 1; j < vertices.length; j++) {
-        ctx.lineTo(vertices[j].x, vertices[j].y);
-    }
-    ctx.lineTo(vertices[0].x, vertices[0].y);
-    ctx.closePath();
-    
-    if (glow) {
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = color;
-    } else {
-        ctx.shadowBlur = 0;
-    }
-    
-    ctx.fillStyle = '#080811';
-    ctx.fill();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
+    ctx.moveTo(bx, by); ctx.lineTo(bx, by - fill);
+    ctx.strokeStyle = col;
+    ctx.lineWidth   = 12; ctx.lineCap = 'round';
+    ctx.shadowBlur  = 16; ctx.shadowColor = col;
     ctx.stroke();
+    ctx.shadowBlur  = 0;
+
+    ctx.fillStyle  = '#fff';
+    ctx.font       = 'bold 10px Orbitron,monospace';
+    ctx.textAlign  = 'center';
+    ctx.fillText(Math.round(power * 100) + '%', bx, by - fill - 7);
+  }
 }
 
-function drawCircle(x, y, radius, color, isHit = false) {
-    ctx.beginPath();
-    ctx.arc(x, y, radius, 0, 2 * Math.PI);
-    ctx.fillStyle = '#111';
-    
-    ctx.shadowBlur = isHit ? 30 : 15;
-    ctx.shadowColor = color;
-    
-    ctx.fill();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = isHit ? 4 : 2;
-    ctx.stroke();
-    
-    // Desenho interno para os bumpers (estilo neon)
-    ctx.beginPath();
-    ctx.arc(x, y, radius * 0.4, 0, 2 * Math.PI);
-    ctx.fillStyle = color;
-    ctx.fill();
+function drawGameOverScreen() {
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign  = 'center';
+  ctx.shadowBlur = 30; ctx.shadowColor = C.b1;
+  ctx.fillStyle  = C.b1;
+  ctx.font       = 'bold 54px Orbitron,monospace';
+  ctx.fillText('GAME OVER', W/2, H/2 - 30);
+
+  ctx.shadowBlur = 15; ctx.shadowColor = C.b2;
+  ctx.fillStyle  = C.b2;
+  ctx.font       = '20px Orbitron,monospace';
+  ctx.fillText('Pontuação: ' + score.toString().padStart(6,'0'), W/2, H/2 + 15);
+
+  ctx.fillStyle  = 'rgba(255,255,255,0.5)';
+  ctx.font       = '13px Orbitron,monospace';
+  ctx.fillText('Pressione F5 para jogar de novo', W/2, H/2 + 52);
+  ctx.shadowBlur = 0;
 }
 
-function render() {
-    // Fundo semi-transparente para motion blur leve
-    ctx.fillStyle = 'rgba(13, 13, 26, 0.4)';
-    ctx.fillRect(0, 0, WIDTH, HEIGHT);
-    
-    // Desenhar Rastro da Bola
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = COLORS.ballGlow;
-    for (let p of ballParticles) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, ball.circleRadius * 0.6, 0, 2 * Math.PI);
-        ctx.fillStyle = `rgba(255, 255, 255, ${p.alpha * 0.5})`;
-        ctx.fill();
-    }
+function frame() {
+  // fundo com leve persistence
+  ctx.fillStyle = 'rgba(10,10,22,0.5)';
+  ctx.fillRect(0, 0, W, H);
 
-    // Desenhar Walls
-    walls.forEach(w => drawBody(w, COLORS.wallGlow, true));
-    
-    // Desenhar Bumpers
-    bumpers.forEach(b => {
-        const hitRadius = b.plugin.hitRadius;
-        drawCircle(b.position.x, b.position.y, hitRadius, b.plugin.color, hitRadius > b.circleRadius + 1);
-    });
-    
-    // Desenhar Flippers
-    drawBody(flipperLeft, COLORS.flipper, true);
-    drawBody(flipperRight, COLORS.flipper, true);
-    
-    // Desenhar Bola
+  // rastro
+  for (const p of trail) {
     ctx.beginPath();
-    ctx.arc(ball.position.x, ball.position.y, ball.circleRadius, 0, 2 * Math.PI);
-    ctx.fillStyle = COLORS.ball;
-    ctx.shadowBlur = 20;
-    ctx.shadowColor = COLORS.ballGlow;
+    ctx.arc(p.x, p.y, ball.circleRadius * 0.5, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(136,187,255,${p.a * 0.4})`;
     ctx.fill();
-    ctx.shadowBlur = 0; // reset
-    
-    // Lançador - Mola visual
-    ctx.beginPath();
-    ctx.moveTo(WIDTH - 25, HEIGHT);
-    ctx.lineTo(WIDTH - 25, HEIGHT - 100);
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-    ctx.lineWidth = 10;
-    ctx.stroke();
+  }
 
-    requestAnimationFrame(render);
+  // paredes
+  for (const w of walls) poly(w, 'rgba(8,8,20,0.9)', C.wall, 10);
+
+  // bumpers
+  for (const b of bumpers) {
+    const hit = b.plugin.hit > 0;
+    const col = b.plugin.color;
+    const r   = b.circleRadius;
+    circle(b.position.x, b.position.y, r, '#0a0a1c', col, hit ? 30 : 14);
+    // núcleo
+    circle(b.position.x, b.position.y, r * 0.38, hit ? '#fff' : col, col, hit ? 18 : 6);
+  }
+
+  // flippers
+  poly(flipL, 'rgba(0,20,24,0.95)', C.flipper, 16);
+  poly(flipR, 'rgba(0,20,24,0.95)', C.flipper, 16);
+
+  // bola
+  circle(ball.position.x, ball.position.y, ball.circleRadius, C.ball, C.trail, 20);
+
+  drawHUD();
+  if (gameOver) drawGameOverScreen();
+
+  requestAnimationFrame(frame);
 }
 
-// Iniciar Loop
-render();
+frame();
