@@ -27,7 +27,11 @@ updateScore(0);
 
 // ── Motor Físico ──────────────────────────────────────────────
 const engine = Engine.create();
-engine.gravity.y = 1.8;
+// ╔══════════════════════════════════════════════════════════╗
+// ║  GRAVIDADE — Quanto maior, mais rápido a bola cai.     ║
+// ║  Valores: 0.5 (leve) → 1.0 (normal) → 2.0 (pesado)    ║
+// ╚══════════════════════════════════════════════════════════╝
+engine.gravity.y = 1.2;
 const world = engine.world;
 
 Runner.run(Runner.create(), engine);
@@ -63,12 +67,15 @@ const walls = [
   sRect(W+55, H/2,  110,   H+400),          // direita
 
   // deflectores diagonais superiores
-  sRect(80,   80,   230,   28,  Math.PI/4),
-  sRect(W-80, 80,   230,   28, -Math.PI/4),
+  sRect(80,    80,  230, 28,  Math.PI/4),        // esquerdo (ok)
+  sRect(W-120, 80,  160, 28, -Math.PI/4),        // direito (encurtado para não invadir a calha)
+
+  // CURVA GUIA no topo da calha — redireciona a bola para o campo (/)
+  sRect(W - 15, 85, 80, 14, Math.PI / 3.5),
 
   // rampas inferiores (guiam para os flippers)
   sRect(90,    H-170, 290, 26,  Math.PI/5.5),
-  sRect(W-90,  H-170, 290, 26, -Math.PI/5.5),
+  sRect(W-130, H-170, 200, 26, -Math.PI/5.5),  // mais curta para não bloquear a calha
 
   // Divisória da calha — CURTA: vai de Y=120 até o fundo.
   // Isso deixa abertura no TOPO para a bola sair para o campo.
@@ -144,10 +151,18 @@ let ball, trail = [];
 
 function spawnBall() {
   if (ball) Composite.remove(world, ball);
-  // Bola repousa sobre o piso da calha (LANE_FLOOR_Y - raio - metade do piso)
   ball = Bodies.circle(W - 23, LANE_FLOOR_Y - 20, 11, {
-    restitution: 0.7, friction: 0.003, frictionAir: 0.003,
-    density: 0.05, label: 'ball', isBullet: true,
+    // ╔══════════════════════════════════════════════════════════╗
+    // ║  PESO DA BOLA — Ajuste aqui para deixar mais leve/pesada║
+    // ║  density: 0.01 (muito leve) → 0.03 (médio) → 0.06 (pesada)║
+    // ║  restitution: 0.5 (pouco quique) → 0.8 (bastante quique)║
+    // ║  frictionAir: 0.001 (rápida) → 0.01 (mais resistência)  ║
+    // ╚══════════════════════════════════════════════════════════╝
+    density: 0.018,       // ← MUDE AQUI o peso da bola
+    restitution: 0.75,    // ← MUDE AQUI o quique da bola
+    friction: 0.002,
+    frictionAir: 0.002,   // ← MUDE AQUI a resistência do ar
+    label: 'ball', isBullet: true,
     collisionFilter: { category: 0x0001, mask: 0xFFFF }
   });
   Composite.add(world, ball);
