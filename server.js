@@ -292,6 +292,83 @@ setInterval(() => {
 }, 1000 / 30);
 // ==========================================
 
+// ==========================================
+// CÓDIGO DO SERVIDOR DE SINUCA
+// ==========================================
+const sinucaIo = io.of('/sinuca');
+let sinucaRooms = {};
+
+function findWaitingSinucaRoom() {
+    for (const [roomId, room] of Object.entries(sinucaRooms)) {
+        if (room.players.length === 1) {
+            return roomId;
+        }
+    }
+    return null;
+}
+
+sinucaIo.on('connection', (socket) => {
+    console.log(`[+] Jogador de Sinuca conectado: ${socket.id}`);
+
+    let roomId = findWaitingSinucaRoom();
+
+    if (!roomId) {
+        roomId = generateRoomId(); // reusa a func do jogo da velha
+        sinucaRooms[roomId] = { players: [], turnIndex: 0 };
+    }
+
+    const room = sinucaRooms[roomId];
+    
+    if (room.players.length < 2) {
+        room.players.push(socket.id);
+        socket.join(roomId);
+        socket.room = roomId; // guarda pra facilitar
+        
+        socket.emit('roomAssigned', { roomId });
+
+        if (room.players.length === 2) {
+            sinucaIo.to(roomId).emit('gameReady', { message: 'Adversário encontrado! Partida de Sinuca iniciada!' });
+            sinucaIo.to(roomId).emit('turnChange', { turnSocketId: room.players[room.turnIndex] });
+        }
+    } else {
+        socket.emit('spectatorAssigned', { message: 'Sala cheia, você é um espectador ou espere nova sala.' });
+    }
+
+    // O jogador do turno atirou
+    socket.on('playerShot', (data) => {
+        const { force, angle } = data;
+        const myRoom = sinucaRooms[socket.room];
+        
+        if (myRoom && myRoom.players[myRoom.turnIndex] === socket.id) {
+            // Repassa a tacada (vetor) para ambos renderizarem a animação simultaneamente
+            sinucaIo.to(socket.room).emit('ballSync', { force, angle, shooter: socket.id });
+        }
+    });
+
+    // Quando as bolas param no cliente do turno atual
+    socket.on('ballsStopped', (data) => {
+        const myRoom = sinucaRooms[socket.room];
+        if (myRoom && myRoom.players[myRoom.turnIndex] === socket.id) {
+            const { foul, pottedBalls } = data;
+            
+            // Regra simples: passa o turno
+            myRoom.turnIndex = myRoom.turnIndex === 0 ? 1 : 0;
+            
+            // Avisa de quem é a nova vez
+            sinucaIo.to(socket.room).emit('turnChange', { turnSocketId: myRoom.players[myRoom.turnIndex] });
+        }
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`[-] Jogador de Sinuca desconectado: ${socket.id}`);
+        if (socket.room && sinucaRooms[socket.room]) {
+            socket.to(socket.room).emit('opponentDisconnected', 'O oponente saiu da mesa.');
+            delete sinucaRooms[socket.room];
+        }
+    });
+});
+// ==========================================
+
 const PORT = process.env.PORT || 3000;
 function getLocalIP() {
     const interfaces = os.networkInterfaces();

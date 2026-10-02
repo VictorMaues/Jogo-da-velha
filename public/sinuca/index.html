@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Sinuca Multiplayer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="ui-layer">
+        <a href="/" class="back-button">Voltar ao Hub</a>
+        <h2>Sala: <span id="room-id">...</span></h2>
+        <h3 id="turn-indicator">Aguardando conexão...</h3>
+    </div>
+    
+    <canvas id="pool-canvas" width="800" height="400"></canvas>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
