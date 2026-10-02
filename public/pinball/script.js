@@ -127,12 +127,17 @@ const FR_CX = HR.x - FW/2 + 10;
 
 const flipL = Bodies.rectangle(FL_CX, FY, FW, FH, {
   isStatic: true, label: 'flipper',
-  friction: 0.05, restitution: 0.25,
+  // ╔══════════════════════════════════════════════════════════╗
+  // ║  ELASTICIDADE DOS MANETES (Bounciness)                   ║
+  // ║  Aumentar faz a bola quicar mais mesmo se o manete       ║
+  // ║  estiver parado. (Padrão era 0.25)                       ║
+  // ╚══════════════════════════════════════════════════════════╝
+  friction: 0.05, restitution: 0.5, // ← MUDE AQUI para alterar a elasticidade base
   collisionFilter: { category: 0x0002, mask: 0x0001 }
 });
 const flipR = Bodies.rectangle(FR_CX, FY, FW, FH, {
   isStatic: true, label: 'flipper',
-  friction: 0.05, restitution: 0.25,
+  friction: 0.05, restitution: 0.5, // ← MUDE AQUI também
   collisionFilter: { category: 0x0002, mask: 0x0001 }
 });
 
@@ -144,7 +149,12 @@ Composite.add(world, [flipL, flipR]);
 // Animação suave dos ângulos
 let angleL = FL_REST;
 let angleR = FR_REST;
-const FLIP_SPEED = 0.12; // interpolação por frame
+// ╔══════════════════════════════════════════════════════════╗
+// ║  VELOCIDADE DO MANETE (FLIPPER)                          ║
+// ║  Controla quão rápido o manete sobe ao apertar o botão.  ║
+// ║  Maior = mais rápido (e rebatida mais brusca).           ║
+// ╚══════════════════════════════════════════════════════════╝
+const FLIP_SPEED = 0.25; // ← MUDE AQUI (0.12 era o padrão, 0.25 é mais rápido)
 
 // ── Bola ──────────────────────────────────────────────────────
 let ball, trail = [];
@@ -250,12 +260,30 @@ Events.on(engine, 'beforeUpdate', () => {
 // side: +1 = pino na extremidade ESQUERDA (centro fica à DIREITA do pino)
 //       -1 = pino na extremidade DIREITA  (centro fica à ESQUERDA do pino)
 function setFlipperPose(body, hinge, angle, side) {
+  const oldX = body.position.x;
+  const oldY = body.position.y;
+  const oldAngle = body.angle;
+
   const offset = side * (FW / 2 - 10);
   // Centro do corpo = pino + offset rotacionado pelo ângulo
   const cx = hinge.x + offset * Math.cos(angle);
   const cy = hinge.y + offset * Math.sin(angle);
   Body.setPosition(body, { x: cx, y: cy });
   Body.setAngle(body, angle);
+
+  // ╔══════════════════════════════════════════════════════════╗
+  // ║  FORÇA DE TRANSFERÊNCIA DE MOVIMENTO PARA A BOLA         ║
+  // ║  Calculamos a velocidade do flipper neste frame para     ║
+  // ║  que a física transfira essa força para a bola no hit.   ║
+  // ║  Aumente 'multiplicadorForca' para rebater BEM forte!    ║
+  // ╚══════════════════════════════════════════════════════════╝
+  const multiplicadorForca = 3.5; // ← MUDE AQUI (Ex: 2.0 a 6.0) para ajustar a porrada final
+  
+  Body.setVelocity(body, { 
+    x: (cx - oldX) * multiplicadorForca, 
+    y: (cy - oldY) * multiplicadorForca 
+  });
+  Body.setAngularVelocity(body, (angle - oldAngle) * multiplicadorForca);
 }
 
 // ── Colisões ──────────────────────────────────────────────────
