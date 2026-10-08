@@ -1,257 +1,196 @@
-const socket = io('/sinuca');
-const canvas = document.getElementById('pool-canvas');
-const ctx = canvas.getContext('2d');
-const turnIndicator = document.getElementById('turn-indicator');
-const roomIdSpan = document.getElementById('room-id');
+const Game = (() => {
+    let state = null;
+    let balls = [];
+    let isOnline = false;
+    let myId = null;
+    let physicsEvents = null;
+    let ballsMoving = false;
+    let accumulator = 0;
+    let lastTime = 0;
+    let aiDifficulty = 'med';
+    
+    const screens = {
+        menu: document.getElementById('main-menu'),
+        game: document.getElementById('game-screen'),
+        over: document.getElementById('game-over-screen')
+    };
 
-let myId = null;
-let isMyTurn = false;
-let ballsMoving = false;
-let myRoomId = null;
-
-// Tabela (Canvas: 800x400)
-const TABLE_W = 800;
-const TABLE_H = 400;
-
-// Estado das Bolas
-// Vamos criar a Branca e um pequeno triângulo de bolas coloridas
-let balls = [
-    { id: 'cue', x: 200, y: 200, vx: 0, vy: 0, radius: 12, color: '#ffffff' }
-];
-
-// Monta o triângulo de bolas (Sinuca/8-ball simplificado)
-const startX = 550;
-const startY = 200;
-const ballRadius = 12;
-const rowSpacing = ballRadius * Math.sqrt(3);
-
-let ballIdCount = 1;
-for (let row = 0; row < 5; row++) {
-    for (let col = 0; col <= row; col++) {
-        let bx = startX + row * rowSpacing;
-        let by = startY - (row * ballRadius) + (col * ballRadius * 2);
-        let color = (row === 2 && col === 1) ? '#111111' : `hsl(${Math.random() * 360}, 80%, 50%)`; // Bola 8 no meio
-        balls.push({ id: `ball_${ballIdCount++}`, x: bx, y: by, vx: 0, vy: 0, radius: 12, color: color });
+    function showScreen(name) {
+        Object.values(screens).forEach(s => s.classList.add('hidden'));
+        screens[name].classList.remove('hidden');
     }
-}
 
-// --- Networking ---
-socket.on('connect', () => {
-    myId = socket.id;
-});
+    function initSinglePlayer(diff) {
+        aiDifficulty = diff;
+        isOnline = false;
+        myId = 'P1';
+        state = Rules.createInitialState('P1', 'BOT');
+        balls = Physics.createRack();
+        showScreen('game');
+        updateHUD();
+        requestAnimationFrame(loop);
+    }
 
-socket.on('roomAssigned', (data) => {
-    myRoomId = data.roomId;
-    roomIdSpan.textContent = myRoomId;
-});
+    function initMultiplayer() {
+        isOnline = true;
+        Network.init({
+            onRoom: id => document.getElementById('room-id').innerText = id,
+            onGameReady: data => {
+                myId = Network.getId();
+                state = Rules.createInitialState(data.p1, data.p2);
+                balls = data.balls.map(b => {
+                    let ball = new Physics.Ball(b.id, b.x, b.y);
+                    ball.active = b.active;
+                    return ball;
+                });
+                showScreen('game');
+                updateHUD();
+                requestAnimationFrame(loop);
+            },
+            onTurnChange: turnId => {
+                state.turnIndex = state.players.indexOf(turnId);
+                updateHUD();
+            },
+            onBallSync: data => {
+                let cue = getCueBall();
+                if(cue) {
+                    cue.vx = Math.cos(data.angle) * data.force;
+                    cue.vy = Math.sin(data.angle) * data.force;
+                    startMoving();
+                }
+            },
+            onSyncState: data => {
+                state = data.state;
+                balls = data.balls.map(b => {
+                    let ball = new Physics.Ball(b.id, b.x, b.y);
+                    ball.active = b.active;
+                    return ball;
+                });
+                updateHUD();
+            },
+            onGameOver: data => {
+                state = data.state;
+                endGame(state.winner, state.foulMessage);
+            },
+            onOpponentDisconnect: msg => {
+                endGame(myId, "Oponente desconectou. Você venceu!");
+            },
+            onSpectator: msg => alert(msg)
+        });
+    }
 
-socket.on('spectatorAssigned', (data) => {
-    turnIndicator.textContent = data.message;
-    turnIndicator.className = 'wait-turn';
-});
+    function updateHUD() {
+        if (!state) return;
+        let p1 = state.players[0];
+        let p2 = state.players[1];
+        let myTurn = isMyTurn();
 
-socket.on('gameReady', (data) => {
-    console.log(data.message);
-});
+        document.getElementById('turn-indicator').innerText = state.isGameOver ? "Fim de Jogo" : (myTurn ? "SEU TURNO" : "Turno do Oponente");
+        document.getElementById('turn-indicator').className = myTurn ? 'my-turn' : 'wait-turn';
 
-socket.on('turnChange', (data) => {
-    isMyTurn = (data.turnSocketId === myId);
-    turnIndicator.textContent = isMyTurn ? "SEU TURNO! Arraste o mouse para atirar." : "Turno do Oponente aguarde...";
-    turnIndicator.className = isMyTurn ? 'my-turn' : 'wait-turn';
-});
+        document.getElementById('p1-info').querySelector('.p-name').innerText = p1 === myId ? "Você" : "Oponente";
+        document.getElementById('p2-info').querySelector('.p-name').innerText = p2 === myId ? "Você" : "Oponente";
 
-socket.on('ballSync', (data) => {
-    // Aplica o vetor na bola branca ao receber a tacada
-    const cueBall = balls.find(b => b.id === 'cue');
-    if (cueBall) {
-        cueBall.vx = Math.cos(data.angle) * data.force;
-        cueBall.vy = Math.sin(data.angle) * data.force;
+        document.getElementById('p1-group').innerText = state.playerGroups[p1] ? "Grupo: " + (state.playerGroups[p1] === 'SOLID' ? 'Lisas' : 'Listradas') : "Grupo: Aberto";
+        document.getElementById('p2-group').innerText = state.playerGroups[p2] ? "Grupo: " + (state.playerGroups[p2] === 'SOLID' ? 'Lisas' : 'Listradas') : "Grupo: Aberto";
+
+        let msg = state.foulMessage || (state.groupsAssigned ? "Mesa Fechada" : "Mesa Aberta");
+        if (state.ballInHand) msg += " - BOLA NA MÃO";
+        document.getElementById('message-log').innerText = msg;
+
+        Input.setMode(state.ballInHand && myTurn ? 'PLACE' : 'AIM');
+    }
+
+    function isMyTurn() { return state && state.players[state.turnIndex] === myId; }
+    function getCueBall() { return balls.find(b => b.id === 0); }
+
+    function handleShoot(angle, force) {
+        if (isOnline) {
+            Network.sendShot(angle, force);
+            let cue = getCueBall();
+            if(cue) { cue.vx = Math.cos(angle) * force; cue.vy = Math.sin(angle) * force; startMoving(); }
+        } else {
+            let cue = getCueBall();
+            if(cue) { cue.vx = Math.cos(angle) * force; cue.vy = Math.sin(angle) * force; startMoving(); }
+        }
+    }
+
+    function handlePlaceCue(x, y) {
+        let cue = getCueBall();
+        if (!cue) { cue = new Physics.Ball(0, x, y); balls.push(cue); } 
+        else { cue.x = x; cue.y = y; cue.active = true; cue.vx = 0; cue.vy = 0; }
+        state.ballInHand = false;
+        Input.setMode('AIM');
+        updateHUD();
+    }
+
+    function startMoving() {
         ballsMoving = true;
-        isMyTurn = false; // Bloqueia input enquanto rola
-        turnIndicator.textContent = "Bolas em movimento...";
-        turnIndicator.className = 'wait-turn';
+        physicsEvents = { firstHit: null, potted: [], cuePotted: false, touchedCushion: false };
+        updateHUD();
     }
-});
 
-socket.on('opponentDisconnected', (msg) => {
-    turnIndicator.textContent = msg + " Recarregue a página.";
-    turnIndicator.className = 'wait-turn';
-});
-
-// --- Input do Jogador (Estilingue) ---
-let isAiming = false;
-let aimStart = { x: 0, y: 0 };
-let mouseCurrent = { x: 0, y: 0 };
-
-canvas.addEventListener('mousedown', (e) => {
-    if (!isMyTurn || ballsMoving) return;
-    const rect = canvas.getBoundingClientRect();
-    const cueBall = balls.find(b => b.id === 'cue');
-    
-    // Calcula a posição do mouse na tela
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    
-    // Verifica se clicou perto da bola branca
-    const dist = Math.hypot(mx - cueBall.x, my - cueBall.y);
-    if (dist < cueBall.radius * 3) {
-        isAiming = true;
-        aimStart = { x: mx, y: my };
-        mouseCurrent = { x: mx, y: my };
+    function endTurn() {
+        ballsMoving = false;
+        if (!isOnline) {
+            state = Rules.processShot(state, physicsEvents);
+            if (state.isGameOver) {
+                endGame(state.winner, state.foulMessage);
+            } else {
+                updateHUD();
+                if (state.players[state.turnIndex] === 'BOT') {
+                    AI.takeTurn(state, balls, aiDifficulty, handleShoot);
+                }
+            }
+        } else {
+            let finalBalls = balls.map(b => ({id: b.id, x: b.x, y: b.y, active: b.active}));
+            Network.sendSimulationResult(physicsEvents, finalBalls);
+        }
     }
-});
 
-canvas.addEventListener('mousemove', (e) => {
-    if (!isAiming) return;
-    const rect = canvas.getBoundingClientRect();
-    mouseCurrent = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-});
+    function endGame(winner, reason) {
+        showScreen('game-over');
+        document.getElementById('game-over-title').innerText = winner === myId ? "Você Venceu!" : "Você Perdeu!";
+        document.getElementById('game-over-reason').innerText = reason;
+    }
 
-canvas.addEventListener('mouseup', (e) => {
-    if (!isAiming) return;
-    isAiming = false;
-    
-    const dx = aimStart.x - mouseCurrent.x;
-    const dy = aimStart.y - mouseCurrent.y;
-    
-    if (Math.hypot(dx, dy) < 5) return; // Clique muito fraco ignorado
+    function loop(time) {
+        if (!lastTime) lastTime = time;
+        let dt = (time - lastTime) / 1000;
+        lastTime = time;
 
-    const angle = Math.atan2(dy, dx);
-    // Limite de força
-    const force = Math.min(Math.sqrt(dx*dx + dy*dy) * 0.15, 25); 
-
-    socket.emit('playerShot', { force, angle });
-});
-
-// --- Física e Renderização Simples ---
-function updatePhysics() {
-    let stillMoving = false;
-    const FRICTION = 0.985; // Desaceleração por frame
-
-    // Atualiza posições e atrito
-    balls.forEach(b => {
-        b.vx *= FRICTION;
-        b.vy *= FRICTION;
-        
-        if (Math.abs(b.vx) < 0.05) b.vx = 0;
-        if (Math.abs(b.vy) < 0.05) b.vy = 0;
-
-        b.x += b.vx;
-        b.y += b.vy;
-
-        // Colisão com as tabelas (bordas)
-        if (b.x < b.radius) { b.x = b.radius; b.vx *= -0.8; }
-        if (b.x > TABLE_W - b.radius) { b.x = TABLE_W - b.radius; b.vx *= -0.8; }
-        if (b.y < b.radius) { b.y = b.radius; b.vy *= -0.8; }
-        if (b.y > TABLE_H - b.radius) { b.y = TABLE_H - b.radius; b.vy *= -0.8; }
-
-        if (b.vx !== 0 || b.vy !== 0) stillMoving = true;
-    });
-
-    // Resolve colisões Bolas contra Bolas (Física elástica 2D simplificada)
-    for (let i = 0; i < balls.length; i++) {
-        for (let j = i + 1; j < balls.length; j++) {
-            let b1 = balls[i];
-            let b2 = balls[j];
-            
-            let dx = b2.x - b1.x;
-            let dy = b2.y - b1.y;
-            let dist = Math.hypot(dx, dy);
-            let minDist = b1.radius + b2.radius;
-
-            if (dist < minDist) {
-                // Sobreposição - separa as bolas para não grudarem
-                let overlap = minDist - dist;
-                let nx = dx / dist;
-                let ny = dy / dist;
-                
-                b1.x -= nx * (overlap / 2);
-                b1.y -= ny * (overlap / 2);
-                b2.x += nx * (overlap / 2);
-                b2.y += ny * (overlap / 2);
-
-                // Conservação do Momento (Assumindo massas iguais = 1)
-                // Projeção da velocidade na normal do impacto
-                let p = 2 * (b1.vx * nx + b1.vy * ny - b2.vx * nx - b2.vy * ny) / 2;
-                
-                let bounciness = 0.9; // Perda de energia na colisão
-                b1.vx -= p * nx * bounciness;
-                b1.vy -= p * ny * bounciness;
-                b2.vx += p * nx * bounciness;
-                b2.vy += p * ny * bounciness;
+        if (ballsMoving) {
+            accumulator += dt;
+            let wasMoving = false;
+            while (accumulator >= Physics.DT) {
+                wasMoving = Physics.step(balls, physicsEvents) || wasMoving;
+                accumulator -= Physics.DT;
+            }
+            if (!wasMoving) {
+                balls.forEach(b => { b.vx = 0; b.vy = 0; });
+                endTurn();
             }
         }
-    }
 
-    // Se parou de mover neste frame
-    if (ballsMoving && !stillMoving) {
-        ballsMoving = false;
-        // O jogador cujo turno cabia a ele avisa que as bolas pararam
-        socket.emit('ballsStopped', { foul: false, pottedBalls: [] });
-    }
-}
+        Render.drawTable();
+        Render.drawBalls(balls);
 
-function render() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Desenhar caçapas (6 buracos pretos)
-    ctx.fillStyle = '#0a0a0a';
-    const holes = [
-        { x: 0, y: 0 }, { x: TABLE_W/2, y: 0 }, { x: TABLE_W, y: 0 },
-        { x: 0, y: TABLE_H }, { x: TABLE_W/2, y: TABLE_H }, { x: TABLE_W, y: TABLE_H }
-    ];
-    holes.forEach(h => {
-        ctx.beginPath();
-        ctx.arc(h.x, h.y, 25, 0, Math.PI * 2);
-        ctx.fill();
-    });
-
-    // Desenhar linha de mira se estiver mirando
-    if (isAiming) {
-        const cueBall = balls.find(b => b.id === 'cue');
-        if (cueBall) {
-            ctx.beginPath();
-            ctx.moveTo(cueBall.x, cueBall.y);
-            const dx = aimStart.x - mouseCurrent.x;
-            const dy = aimStart.y - mouseCurrent.y;
-            ctx.lineTo(cueBall.x - dx * 3, cueBall.y - dy * 3); // Oposto do drag
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-            ctx.setLineDash([5, 5]);
-            ctx.lineWidth = 2;
-            ctx.stroke();
-            ctx.setLineDash([]);
+        if (!ballsMoving && isMyTurn() && state && !state.ballInHand) {
+            let aim = Input.getAim();
+            let cue = getCueBall();
+            if (cue && cue.active) Render.drawAim(cue, aim.angle, aim.force);
         }
+
+        requestAnimationFrame(loop);
     }
 
-    // Desenhar bolas
-    balls.forEach(b => {
-        // Sombra suave
-        ctx.beginPath();
-        ctx.arc(b.x + 2, b.y + 2, b.radius, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(0,0,0,0.4)';
-        ctx.fill();
+    document.getElementById('btn-sp-easy').onclick = () => initSinglePlayer('easy');
+    document.getElementById('btn-sp-med').onclick = () => initSinglePlayer('med');
+    document.getElementById('btn-sp-hard').onclick = () => initSinglePlayer('hard');
+    document.getElementById('btn-mp').onclick = () => { initMultiplayer(); showScreen('game'); };
+    document.getElementById('btn-back-menu').onclick = () => { location.reload(); };
 
-        // Bola principal
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
-        ctx.fillStyle = b.color;
-        ctx.fill();
+    Input.init(handleShoot, handlePlaceCue);
 
-        // Brilho
-        ctx.beginPath();
-        ctx.arc(b.x - 4, b.y - 4, b.radius * 0.3, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255,255,255,0.4)';
-        ctx.fill();
-        
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-    });
-}
-
-function gameLoop() {
-    updatePhysics();
-    render();
-    requestAnimationFrame(gameLoop);
-}
-gameLoop();
+    return { isMyTurn, getCueBall, isMoving: () => ballsMoving };
+})();

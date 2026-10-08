@@ -297,6 +297,7 @@ setInterval(() => {
 // ==========================================
 const sinucaIo = io.of('/sinuca');
 let sinucaRooms = {};
+const Rules = require('./public/sinuca/js/rules.js');
 
 function findWaitingSinucaRoom() {
     for (const [roomId, room] of Object.entries(sinucaRooms)) {
@@ -307,14 +308,30 @@ function findWaitingSinucaRoom() {
     return null;
 }
 
+function getInitialBalls() {
+    let balls = [{id:0, x:200, y:200}];
+    const startX = 550, startY = 200, r = 12;
+    const rowSpacing = r * Math.sqrt(3);
+    const order = [1, 9, 2, 10, 8, 3, 11, 4, 12, 13, 5, 14, 6, 15, 7];
+    let idx = 0;
+    for (let row = 0; row < 5; row++) {
+        for (let col = 0; col <= row; col++) {
+            let bx = startX + row * rowSpacing;
+            let by = startY - (row * r) + (col * r * 2);
+            balls.push({id: order[idx++], x: bx, y: by, active: true});
+        }
+    }
+    return balls;
+}
+
 sinucaIo.on('connection', (socket) => {
     console.log(`[+] Jogador de Sinuca conectado: ${socket.id}`);
 
     let roomId = findWaitingSinucaRoom();
 
     if (!roomId) {
-        roomId = generateRoomId(); // reusa a func do jogo da velha
-        sinucaRooms[roomId] = { players: [], turnIndex: 0 };
+        roomId = generateRoomId();
+        sinucaRooms[roomId] = { players: [], state: null, balls: null };
     }
 
     const room = sinucaRooms[roomId];
@@ -322,40 +339,46 @@ sinucaIo.on('connection', (socket) => {
     if (room.players.length < 2) {
         room.players.push(socket.id);
         socket.join(roomId);
-        socket.room = roomId; // guarda pra facilitar
+        socket.room = roomId;
         
         socket.emit('roomAssigned', { roomId });
 
         if (room.players.length === 2) {
-            sinucaIo.to(roomId).emit('gameReady', { message: 'Adversário encontrado! Partida de Sinuca iniciada!' });
-            sinucaIo.to(roomId).emit('turnChange', { turnSocketId: room.players[room.turnIndex] });
+            room.state = Rules.createInitialState(room.players[0], room.players[1]);
+            room.balls = getInitialBalls();
+            
+            sinucaIo.to(roomId).emit('gameReady', { 
+                message: 'Partida iniciada!',
+                p1: room.players[0], p2: room.players[1],
+                balls: room.balls
+            });
+            sinucaIo.to(roomId).emit('turnChange', room.players[room.state.turnIndex]);
         }
     } else {
         socket.emit('spectatorAssigned', { message: 'Sala cheia, você é um espectador ou espere nova sala.' });
     }
 
-    // O jogador do turno atirou
     socket.on('playerShot', (data) => {
         const { force, angle } = data;
         const myRoom = sinucaRooms[socket.room];
         
-        if (myRoom && myRoom.players[myRoom.turnIndex] === socket.id) {
-            // Repassa a tacada (vetor) para ambos renderizarem a animação simultaneamente
+        if (myRoom && myRoom.state && myRoom.players[myRoom.state.turnIndex] === socket.id) {
             sinucaIo.to(socket.room).emit('ballSync', { force, angle, shooter: socket.id });
         }
     });
 
-    // Quando as bolas param no cliente do turno atual
-    socket.on('ballsStopped', (data) => {
+    socket.on('simulationResult', (data) => {
         const myRoom = sinucaRooms[socket.room];
-        if (myRoom && myRoom.players[myRoom.turnIndex] === socket.id) {
-            const { foul, pottedBalls } = data;
-            
-            // Regra simples: passa o turno
-            myRoom.turnIndex = myRoom.turnIndex === 0 ? 1 : 0;
-            
-            // Avisa de quem é a nova vez
-            sinucaIo.to(socket.room).emit('turnChange', { turnSocketId: myRoom.players[myRoom.turnIndex] });
+        if (myRoom && myRoom.state && myRoom.players[myRoom.state.turnIndex] === socket.id) {
+            myRoom.state = Rules.processShot(myRoom.state, data.events);
+            myRoom.balls = data.finalBalls;
+
+            if (myRoom.state.isGameOver) {
+                sinucaIo.to(socket.room).emit('gameOver', { state: myRoom.state });
+            } else {
+                sinucaIo.to(socket.room).emit('syncState', { state: myRoom.state, balls: myRoom.balls });
+                sinucaIo.to(socket.room).emit('turnChange', myRoom.players[myRoom.state.turnIndex]);
+            }
         }
     });
 
@@ -368,7 +391,6 @@ sinucaIo.on('connection', (socket) => {
     });
 });
 // ==========================================
-
 const PORT = process.env.PORT || 3000;
 function getLocalIP() {
     const interfaces = os.networkInterfaces();

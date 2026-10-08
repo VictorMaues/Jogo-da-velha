@@ -1,46 +1,82 @@
 body {
     background-color: #1a1a1a;
     color: white;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: 'Outfit', sans-serif;
+    margin: 0; padding: 0;
     display: flex;
-    flex-direction: column;
+    justify-content: center;
     align-items: center;
-    margin: 0; padding: 20px;
+    height: 100vh;
 }
 
-#ui-layer { 
-    text-align: center; 
-    margin-bottom: 20px; 
+.screen {
+    width: 100%; height: 100%;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+}
+
+.hidden { display: none !important; }
+
+h1 { font-size: 3rem; color: #f1c40f; text-shadow: 0 4px 10px rgba(0,0,0,0.5); margin-bottom: 2rem; }
+
+.menu-buttons button {
+    display: block; width: 300px; padding: 15px; margin: 10px 0;
+    font-size: 1.2rem; font-family: 'Outfit', sans-serif;
+    border: none; border-radius: 8px;
+    background: #333; color: #fff;
+    cursor: pointer; transition: 0.2s;
+}
+.menu-buttons button:hover { background: #555; transform: scale(1.05); }
+
+.back-link {
+    display: block; text-align: center; margin-top: 20px;
+    color: #aaa; text-decoration: none;
+}
+
+#hud {
     width: 800px;
+    margin-bottom: 20px;
+    background: rgba(0,0,0,0.5);
+    padding: 10px 20px;
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    box-sizing: border-box;
+}
+
+.hud-top {
+    display: flex; justify-content: space-between; align-items: center;
+}
+
+.player-info {
+    display: flex; flex-direction: column; align-items: center;
+    font-size: 1.2rem;
+}
+
+.p-group { color: #f1c40f; font-size: 1rem; margin-top: 5px; }
+
+.game-status { text-align: center; }
+
+#turn-indicator { font-size: 1.5rem; font-weight: bold; margin-bottom: 5px; }
+.my-turn { color: #2ecc71; }
+.wait-turn { color: #e74c3c; }
+
+#message-log { color: #e67e22; font-size: 0.9rem; margin-top: 5px; font-weight: 600; }
+#room-indicator { font-size: 0.9rem; color: #aaa; }
+
+.canvas-container {
     position: relative;
 }
 
-.back-button {
-    position: absolute;
-    left: 0;
-    top: 0;
-    background: #333;
-    color: #fff;
-    padding: 8px 16px;
-    text-decoration: none;
-    border-radius: 4px;
-    font-size: 14px;
-}
-.back-button:hover { background: #555; }
-
-h2 { margin: 0 0 10px 0; color: #aaa; }
-h3 { margin: 0; padding: 10px; border-radius: 4px; background: #333; }
-
 #pool-canvas {
-    background: #006633; /* Feltro verde clássico */
-    border: 25px solid #5c3a21; /* Borda de madeira grossa */
+    background: #005027;
+    background-image: radial-gradient(circle, #006633 0%, #00401f 100%);
+    border: 30px solid #5c3a21;
     border-radius: 15px;
-    box-shadow: 
-        inset 0 0 20px rgba(0,0,0,0.5), 
-        0 10px 30px rgba(0,0,0,0.8),
-        0 0 0 5px #3a2211; /* Contorno externo da madeira */
-    cursor: crosshair;
+    box-shadow: inset 0 0 40px rgba(0,0,0,0.8), 0 15px 40px rgba(0,0,0,0.9), 0 0 0 5px #3a2211;
 }
 
-.my-turn { color: #00ff00; border-bottom: 3px solid #00ff00; }
-.wait-turn { color: #ff9900; border-bottom: 3px solid #ff9900; }
+#game-over-screen {
+    background: rgba(0,0,0,0.9); position: absolute; z-index: 100; left: 0; top: 0; width: 100vw; height: 100vh;
+}
+#game-over-title { font-size: 4rem; color: #f1c40f; }
+#game-over-reason { font-size: 1.5rem; margin-bottom: 30px; }
