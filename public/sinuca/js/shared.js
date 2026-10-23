@@ -4,6 +4,11 @@
     exports.BALL_RADIUS = 12;
     exports.POCKET_RADIUS = 25;
 
+    exports.POCKETS = [
+        {x: 0, y: 0}, {x: exports.TABLE_W / 2, y: -10}, {x: exports.TABLE_W, y: 0},
+        {x: 0, y: exports.TABLE_H}, {x: exports.TABLE_W / 2, y: exports.TABLE_H + 10}, {x: exports.TABLE_W, y: exports.TABLE_H}
+    ];
+
     exports.BALL_TYPES = { CUE: 0, SOLID: 1, STRIPE: 2, EIGHT: 8 };
 
     exports.getBallType = function(id) {

@@ -64,6 +64,7 @@ const Input = (() => {
     return {
         init: (onShoot, onPlace) => { onShootCb = onShoot; onPlaceCueCb = onPlace; },
         setMode: m => mode = m,
-        getAim: () => ({ angle: aimAngle, force: force })
+        getAim: () => ({ angle: aimAngle, force: force }),
+        getMouse: () => ({ x: mouse.x, y: mouse.y })
     };
 })();

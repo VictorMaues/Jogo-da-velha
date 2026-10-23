@@ -15,6 +15,32 @@
         };
     };
 
+    // Valida onde a bola branca pode ser solta (bola na mão).
+    // balls: [{id, x, y, active}]. options.maxX (opcional): limite da linha de saída.
+    exports.isValidCuePlacement = function(x, y, balls, options) {
+        options = options || {};
+        const r = Shared.BALL_RADIUS;
+
+        // Dentro da área jogável (centro da bola a pelo menos r das tabelas)
+        if (x < r || x > Shared.TABLE_W - r || y < r || y > Shared.TABLE_H - r) return false;
+        if (options.maxX !== undefined && x > options.maxX) return false;
+
+        // Distância >= 2r de toda bola ativa (comparando quadrados)
+        const minDist2 = (2 * r) * (2 * r);
+        for (const b of balls) {
+            if (b.id === 0 || !b.active) continue;
+            const dx = b.x - x, dy = b.y - y;
+            if (dx * dx + dy * dy < minDist2 - 1e-6) return false;
+        }
+
+        // Não pode ser solta dentro de uma caçapa
+        for (const p of Shared.POCKETS) {
+            if (Math.hypot(p.x - x, p.y - y) < Shared.POCKET_RADIUS) return false;
+        }
+
+        return true;
+    };
+
     exports.processShot = function(state, shotResult) {
         let turnPlayer = state.players[state.turnIndex];
         let nextTurnIndex = state.turnIndex === 0 ? 1 : 0;

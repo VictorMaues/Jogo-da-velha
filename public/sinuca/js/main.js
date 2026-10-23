@@ -116,6 +116,7 @@ const Game = (() => {
     }
 
     function handlePlaceCue(x, y) {
+        if (!Rules.isValidCuePlacement(x, y, balls)) return;
         let cue = getCueBall();
         if (!cue) { cue = new Physics.Ball(0, x, y); balls.push(cue); } 
         else { cue.x = x; cue.y = y; cue.active = true; cue.vx = 0; cue.vy = 0; }
@@ -175,10 +176,20 @@ const Game = (() => {
         Render.drawTable();
         Render.drawBalls(balls);
 
-        if (!ballsMoving && isMyTurn() && state && !state.ballInHand) {
-            let aim = Input.getAim();
-            let cue = getCueBall();
-            if (cue && cue.active) Render.drawAim(cue, aim.angle, aim.force);
+        if (!ballsMoving && isMyTurn() && state) {
+            if (state.ballInHand) {
+                let mouse = Input.getMouse();
+                let valid = Rules.isValidCuePlacement(mouse.x, mouse.y, balls);
+                Render.drawCuePlacement(mouse.x, mouse.y, valid);
+            } else {
+                let aim = Input.getAim();
+                let cue = getCueBall();
+                if (cue && cue.active) {
+                    let dirX = Math.cos(aim.angle), dirY = Math.sin(aim.angle);
+                    let projection = Physics.castCircle(balls, cue, dirX, dirY, 0);
+                    Render.drawAim(cue, aim.angle, aim.force, projection);
+                }
+            }
         }
 
         requestAnimationFrame(loop);

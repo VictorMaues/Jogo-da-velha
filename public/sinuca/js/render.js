@@ -6,11 +6,7 @@ const Render = (() => {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
         ctx.fillStyle = '#0a0a0a';
-        const POCKETS = [
-            {x: 0, y: 0}, {x: Shared.TABLE_W/2, y: -10}, {x: Shared.TABLE_W, y: 0},
-            {x: 0, y: Shared.TABLE_H}, {x: Shared.TABLE_W/2, y: Shared.TABLE_H+10}, {x: Shared.TABLE_W, y: Shared.TABLE_H}
-        ];
-        POCKETS.forEach(p => {
+        Shared.POCKETS.forEach(p => {
             ctx.beginPath();
             ctx.arc(p.x, p.y, Shared.POCKET_RADIUS, 0, Math.PI * 2);
             ctx.fill();
@@ -64,14 +60,56 @@ const Render = (() => {
         });
     }
 
-    function drawAim(cueBall, angle, force) {
-        ctx.beginPath();
-        ctx.moveTo(cueBall.x, cueBall.y);
-        ctx.lineTo(cueBall.x + Math.cos(angle) * 1000, cueBall.y + Math.sin(angle) * 1000);
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.setLineDash([5, 5]); ctx.lineWidth = 1; ctx.stroke();
+    const GUIDE_LEN = 90;   // comprimento de referência dos vetores de saída (100% da velocidade)
+
+    function drawLine(x1, y1, x2, y2) {
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+
+    // projection: resultado de Physics.castCircle (ou null)
+    function drawAim(cueBall, angle, force, projection) {
+        const dirX = Math.cos(angle), dirY = Math.sin(angle);
+        const R = Shared.BALL_RADIUS;
+
+        ctx.save();
+
+        // Trajetória da branca até o ponto de contato (ou até a tabela)
+        const reach = projection ? projection.t : 1000;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+        ctx.setLineDash([6, 6]); ctx.lineWidth = 1;
+        drawLine(cueBall.x, cueBall.y, cueBall.x + dirX * reach, cueBall.y + dirY * reach);
         ctx.setLineDash([]);
 
+        if (projection) {
+            // Bola fantasma
+            ctx.beginPath();
+            ctx.arc(projection.ghost.x, projection.ghost.y, R, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+            ctx.lineWidth = 1.5; ctx.stroke();
+
+            if (projection.type === 'ball') {
+                ctx.lineCap = 'round';
+
+                // Saída da bola alvo (ao longo da linha de centros)
+                const t = projection.target, n = projection.targetDir;
+                const tLen = GUIDE_LEN * projection.targetFrac;
+                ctx.strokeStyle = 'rgba(241, 196, 15, 0.9)'; ctx.lineWidth = 2;
+                drawLine(t.x + n.x * R, t.y + n.y * R, t.x + n.x * (R + tLen), t.y + n.y * (R + tLen));
+
+                // Desvio da branca (tangente)
+                if (projection.cueDir) {
+                    const g = projection.ghost, c = projection.cueDir;
+                    const cLen = GUIDE_LEN * projection.cueFrac;
+                    ctx.strokeStyle = 'rgba(93, 173, 226, 0.9)'; ctx.lineWidth = 2;
+                    drawLine(g.x + c.x * R, g.y + c.y * R, g.x + c.x * (R + cLen), g.y + c.y * (R + cLen));
+                }
+            }
+        }
+        ctx.restore();
+
+        ctx.save();
         const cueDist = 20 + force * 2;
         const stickX = cueBall.x - Math.cos(angle) * cueDist;
         const stickY = cueBall.y - Math.sin(angle) * cueDist;
@@ -85,7 +123,20 @@ const Render = (() => {
         ctx.beginPath();
         ctx.moveTo(stickX, stickY); ctx.lineTo(stickX - Math.cos(angle) * 10, stickY - Math.sin(angle) * 10);
         ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 6; ctx.stroke();
+        ctx.restore();
     }
 
-    return { drawTable, drawBalls, drawAim, canvas };
+    // Preview da bola branca durante "bola na mão" (verde = válido, vermelho = inválido)
+    function drawCuePlacement(x, y, valid) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, Shared.BALL_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = valid ? 'rgba(46, 204, 113, 0.35)' : 'rgba(231, 76, 60, 0.35)';
+        ctx.fill();
+        ctx.strokeStyle = valid ? 'rgba(46, 204, 113, 0.9)' : 'rgba(231, 76, 60, 0.9)';
+        ctx.lineWidth = 2; ctx.stroke();
+        ctx.restore();
+    }
+
+    return { drawTable, drawBalls, drawAim, drawCuePlacement, canvas };
 })();
