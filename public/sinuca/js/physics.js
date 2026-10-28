@@ -1,23 +1,38 @@
-const Physics = (() => {
+(function(exports){
+    // Isomórfico: no browser usa window.Shared; no Node usa require. (Não usar `typeof exports`
+    // aqui dentro: `exports` é parâmetro da IIFE e sempre existe.)
+    const IS_NODE = typeof module !== 'undefined' && !!module.exports;
+    const Shared = IS_NODE ? require('./shared.js') : window.Shared;
+
     // Passo "visível" para o main.js (fixed timestep). Internamente é subdividido.
     const DT = 1 / 120;
     const SUBSTEPS = 4;               // sub-passos por DT -> 1/480 s cada
     const SOLVER_ITERATIONS = 6;      // iterações do solver de contatos por sub-passo
     const SUB_DT = DT / SUBSTEPS;
     const CONTACT_EPS = 1e-3;         // tolerância para considerar "em contato"
+    const MAX_SIM_STEPS = 120 * 90;   // trava de segurança: 90 s de simulação
 
-    const FRICTION = 300; 
+    const FRICTION = 300;
     const RESTITUTION = 0.95;
     const CUSHION_RESTITUTION = 0.8;
     const MIN_VELOCITY = 5;
 
     const POCKETS = Shared.POCKETS;
 
+    // Math.hypot pode divergir entre engines; sqrt/multiplicação são determinísticos (IEEE 754).
+    function hyp(x, y) { return Math.sqrt(x * x + y * y); }
+
     class Ball {
         constructor(id, x, y) {
             this.id = id; this.x = x; this.y = y;
             this.vx = 0; this.vy = 0; this.active = true;
         }
+    }
+
+    // Eventos de uma tacada, consumidos por Rules.processShot.
+    // pottedPockets[id] = índice da caçapa (posição em Shared.POCKETS) onde a bola caiu.
+    function createEvents() {
+        return { firstHit: null, potted: [], pottedPockets: {}, cuePotted: false, touchedCushion: false };
     }
 
     function createRack() {
@@ -35,6 +50,27 @@ const Physics = (() => {
             }
         }
         return balls;
+    }
+
+    // Recoloca uma bola (ex.: a 8 encaçapada no estouro) na marca do pé da mesa,
+    // deslizando para o fundo da mesa se a marca estiver ocupada.
+    function respotBall(balls, id) {
+        const ball = balls.find(b => b.id === id);
+        if (!ball) return;
+        const minDist2 = (2 * Shared.BALL_RADIUS) * (2 * Shared.BALL_RADIUS);
+        const maxX = Shared.TABLE_W - Shared.BALL_RADIUS;
+        let x = 550;
+        const y = Shared.TABLE_H / 2;
+        for (; x < maxX; x += 1) {
+            let free = true;
+            for (const o of balls) {
+                if (o === ball || !o.active) continue;
+                const dx = o.x - x, dy = o.y - y;
+                if (dx * dx + dy * dy < minDist2) { free = false; break; }
+            }
+            if (free) break;
+        }
+        ball.x = x; ball.y = y; ball.vx = 0; ball.vy = 0; ball.active = true;
     }
 
     // ---------- Mesa ----------
@@ -65,12 +101,16 @@ const Physics = (() => {
     function checkPockets(balls, events) {
         for (const b of balls) {
             if (!b.active) continue;
-            for (const p of POCKETS) {
-                if (Math.hypot(b.x - p.x, b.y - p.y) < Shared.POCKET_RADIUS) {
+            for (let pi = 0; pi < POCKETS.length; pi++) {
+                const p = POCKETS[pi];
+                if (hyp(b.x - p.x, b.y - p.y) < Shared.POCKET_RADIUS) {
                     b.active = false;
                     b.vx = 0; b.vy = 0;
                     if (b.id === 0) events.cuePotted = true;
-                    else events.potted.push(b.id);
+                    else {
+                        events.potted.push(b.id);
+                        events.pottedPockets[b.id] = pi;
+                    }
                     break;
                 }
             }
@@ -80,7 +120,7 @@ const Physics = (() => {
     // ---------- Integração ----------
 
     function integrateBall(b, events) {
-        const speed = Math.hypot(b.vx, b.vy);
+        const speed = hyp(b.vx, b.vy);
         if (speed === 0) return;
 
         let newSpeed = Math.max(0, speed - FRICTION * SUB_DT);
@@ -166,6 +206,18 @@ const Physics = (() => {
         return false;
     }
 
+    // Simula a tacada inteira até o repouso (uso no servidor, que é a fonte da verdade).
+    // Retorna o número de passos DT executados (o cliente leva steps*DT s para animar o mesmo).
+    function simulate(balls, events) {
+        let steps = 0;
+        while (steps < MAX_SIM_STEPS) {
+            steps++;
+            if (!step(balls, events)) break;
+        }
+        for (const b of balls) { b.vx = 0; b.vy = 0; }
+        return steps;
+    }
+
     // ---------- Raycast / Swept Circle para a mira ----------
 
     // Varre um círculo (raio BALL_RADIUS) a partir de `origin` na direção (dx, dy).
@@ -174,7 +226,7 @@ const Physics = (() => {
         const r = Shared.BALL_RADIUS;
         const minDist = 2 * r;
 
-        const len = Math.hypot(dx, dy);
+        const len = hyp(dx, dy);
         if (len < 1e-9) return null;
         dx /= len; dy /= len;
 
@@ -208,7 +260,7 @@ const Physics = (() => {
             const dot = Math.max(0, Math.min(1, dx * nx + dy * ny));   // cos(ângulo de corte)
             // Branca: componente tangencial de d (regra dos 90° para massas iguais, sem atrito/spin)
             const tanX = dx - dot * nx, tanY = dy - dot * ny;
-            const tanLen = Math.hypot(tanX, tanY);
+            const tanLen = hyp(tanX, tanY);
 
             return {
                 type: 'ball',
@@ -230,5 +282,14 @@ const Physics = (() => {
         };
     }
 
-    return { Ball, createRack, step, castCircle, DT, RESTITUTION };
-})();
+    exports.Ball = Ball;
+    exports.createRack = createRack;
+    exports.createEvents = createEvents;
+    exports.respotBall = respotBall;
+    exports.step = step;
+    exports.simulate = simulate;
+    exports.castCircle = castCircle;
+    exports.DT = DT;
+    exports.RESTITUTION = RESTITUTION;
+    exports.FRICTION = FRICTION;
+})(typeof module !== 'undefined' && module.exports ? module.exports : (this['Physics'] = {}));

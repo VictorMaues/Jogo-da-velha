@@ -7,6 +7,8 @@ const Network = (() => {
         socket.on('gameReady', callbacks.onGameReady);
         socket.on('turnChange', callbacks.onTurnChange);
         socket.on('ballSync', callbacks.onBallSync);
+        socket.on('cuePlaced', callbacks.onCuePlaced);
+        socket.on('shotRejected', callbacks.onShotRejected);
         socket.on('syncState', callbacks.onSyncState);
         socket.on('gameOver', callbacks.onGameOver);
         socket.on('opponentDisconnected', callbacks.onOpponentDisconnect);
@@ -16,8 +18,9 @@ const Network = (() => {
     return {
         init,
         getId: () => socket ? socket.id : null,
-        sendShot: (angle, force) => socket.emit('playerShot', { angle, force }),
-        sendSimulationResult: (events, finalBalls) => socket.emit('simulationResult', { events, finalBalls }),
+        // O servidor valida e simula; o cliente só envia a intenção da tacada.
+        sendShot: (angle, force, calledPocket) => socket.emit('playerShot', { angle, force, calledPocket }),
+        sendPlaceCue: (x, y) => socket.emit('placeCue', { x, y }),
         requestRematch: () => socket.emit('requestRematch'),
         disconnect: () => { if(socket) socket.disconnect(); }
     };

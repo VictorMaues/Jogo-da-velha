@@ -13,7 +13,7 @@ const Render = (() => {
         });
 
         ctx.beginPath();
-        ctx.moveTo(200, 0); ctx.lineTo(200, Shared.TABLE_H);
+        ctx.moveTo(Shared.HEADSTRING_X, 0); ctx.lineTo(Shared.HEADSTRING_X, Shared.TABLE_H);
         ctx.strokeStyle = 'rgba(255,255,255,0.2)';
         ctx.lineWidth = 2; ctx.stroke();
     }
@@ -138,5 +138,21 @@ const Render = (() => {
         ctx.restore();
     }
 
-    return { drawTable, drawBalls, drawAim, drawCuePlacement, canvas };
+    // Destaca a caçapa cantada para a bola 8
+    function drawCalledPocket(index) {
+        const p = Shared.POCKETS[index];
+        if (!p) return;
+        const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 200);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Shared.POCKET_RADIUS + 4 + pulse * 3, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(241, 196, 15, ' + (0.6 + pulse * 0.4) + ')';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(241, 196, 15, 0.18)';
+        ctx.fill();
+        ctx.restore();
+    }
+
+    return { drawTable, drawBalls, drawAim, drawCuePlacement, drawCalledPocket, canvas };
 })();

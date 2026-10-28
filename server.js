@@ -295,9 +295,15 @@ setInterval(() => {
 // ==========================================
 // CÓDIGO DO SERVIDOR DE SINUCA
 // ==========================================
+// O servidor é a FONTE DA VERDADE: valida cada tacada, roda a MESMA física dos clientes
+// (public/sinuca/js/physics.js) e só então aplica as regras (rules.js) e publica o estado.
+// Os clientes apenas animam a tacada e "encaixam" no estado oficial ao receber syncState.
 const sinucaIo = io.of('/sinuca');
 let sinucaRooms = {};
+const SinucaPhysics = require('./public/sinuca/js/physics.js');
 const Rules = require('./public/sinuca/js/rules.js');
+
+const SINUCA_SYNC_MARGIN_MS = 300; // folga após a duração da animação antes de publicar o estado
 
 function findWaitingSinucaRoom() {
     for (const [roomId, room] of Object.entries(sinucaRooms)) {
@@ -308,20 +314,8 @@ function findWaitingSinucaRoom() {
     return null;
 }
 
-function getInitialBalls() {
-    let balls = [{id:0, x:200, y:200}];
-    const startX = 550, startY = 200, r = 12;
-    const rowSpacing = r * Math.sqrt(3);
-    const order = [1, 9, 2, 10, 8, 3, 11, 4, 12, 13, 5, 14, 6, 15, 7];
-    let idx = 0;
-    for (let row = 0; row < 5; row++) {
-        for (let col = 0; col <= row; col++) {
-            let bx = startX + row * rowSpacing;
-            let by = startY - (row * r) + (col * r * 2);
-            balls.push({id: order[idx++], x: bx, y: by, active: true});
-        }
-    }
-    return balls;
+function serializeSinucaBalls(balls) {
+    return balls.map(b => ({ id: b.id, x: b.x, y: b.y, active: b.active }));
 }
 
 sinucaIo.on('connection', (socket) => {
@@ -331,26 +325,26 @@ sinucaIo.on('connection', (socket) => {
 
     if (!roomId) {
         roomId = generateRoomId();
-        sinucaRooms[roomId] = { players: [], state: null, balls: null };
+        sinucaRooms[roomId] = { players: [], state: null, balls: null, busy: false, timer: null };
     }
 
     const room = sinucaRooms[roomId];
-    
+
     if (room.players.length < 2) {
         room.players.push(socket.id);
         socket.join(roomId);
         socket.room = roomId;
-        
+
         socket.emit('roomAssigned', { roomId });
 
         if (room.players.length === 2) {
             room.state = Rules.createInitialState(room.players[0], room.players[1]);
-            room.balls = getInitialBalls();
-            
-            sinucaIo.to(roomId).emit('gameReady', { 
+            room.balls = SinucaPhysics.createRack();
+
+            sinucaIo.to(roomId).emit('gameReady', {
                 message: 'Partida iniciada!',
                 p1: room.players[0], p2: room.players[1],
-                balls: room.balls
+                balls: serializeSinucaBalls(room.balls)
             });
             sinucaIo.to(roomId).emit('turnChange', room.players[room.state.turnIndex]);
         }
@@ -358,34 +352,83 @@ sinucaIo.on('connection', (socket) => {
         socket.emit('spectatorAssigned', { message: 'Sala cheia, você é um espectador ou espere nova sala.' });
     }
 
-    socket.on('playerShot', (data) => {
-        const { force, angle } = data;
+    // Bola na mão (e estouro): o servidor valida a posição da branca.
+    socket.on('placeCue', (data) => {
         const myRoom = sinucaRooms[socket.room];
-        
-        if (myRoom && myRoom.state && myRoom.players[myRoom.state.turnIndex] === socket.id) {
-            sinucaIo.to(socket.room).emit('ballSync', { force, angle, shooter: socket.id });
+        if (!myRoom || !myRoom.state || myRoom.busy || myRoom.state.isGameOver) return;
+        if (myRoom.players[myRoom.state.turnIndex] !== socket.id || !myRoom.state.ballInHand) return;
+
+        const x = Number(data && data.x), y = Number(data && data.y);
+        if (!Rules.isValidCuePlacement(x, y, myRoom.balls, Rules.getPlacementOptions(myRoom.state))) {
+            socket.emit('shotRejected', { reason: 'Posição inválida para a bola branca.' });
+            return;
         }
+
+        const cue = myRoom.balls.find(b => b.id === 0);
+        cue.x = x; cue.y = y; cue.vx = 0; cue.vy = 0; cue.active = true;
+        myRoom.state.ballInHand = false;
+        sinucaIo.to(socket.room).emit('cuePlaced', { x, y, state: myRoom.state });
     });
 
-    socket.on('simulationResult', (data) => {
+    socket.on('playerShot', (data) => {
         const myRoom = sinucaRooms[socket.room];
-        if (myRoom && myRoom.state && myRoom.players[myRoom.state.turnIndex] === socket.id) {
-            myRoom.state = Rules.processShot(myRoom.state, data.events);
-            myRoom.balls = data.finalBalls;
+        if (!myRoom || !myRoom.state || myRoom.busy) return;
 
-            if (myRoom.state.isGameOver) {
-                sinucaIo.to(socket.room).emit('gameOver', { state: myRoom.state });
-            } else {
-                sinucaIo.to(socket.room).emit('syncState', { state: myRoom.state, balls: myRoom.balls });
-                sinucaIo.to(socket.room).emit('turnChange', myRoom.players[myRoom.state.turnIndex]);
-            }
+        const shot = {
+            angle: Number(data && data.angle),
+            force: Number(data && data.force),
+            calledPocket: Rules.isPocketIndex(data && data.calledPocket) ? data.calledPocket : null
+        };
+        const cue = myRoom.balls.find(b => b.id === 0);
+        const check = Rules.validateShot(myRoom.state, socket.id, shot, cue);
+        if (!check.ok) {
+            socket.emit('shotRejected', { reason: check.reason });
+            return;
         }
+
+        // Simula a tacada inteira AGORA (determinístico) e publica o resultado após a animação.
+        myRoom.busy = true;
+        const vx = Math.cos(shot.angle) * shot.force;
+        const vy = Math.sin(shot.angle) * shot.force;
+        cue.vx = vx; cue.vy = vy;
+
+        const events = SinucaPhysics.createEvents();
+        const steps = SinucaPhysics.simulate(myRoom.balls, events);
+
+        const state = Rules.processShot(myRoom.state, events, shot.calledPocket);
+        if (state.respot) {
+            state.respot.forEach(id => SinucaPhysics.respotBall(myRoom.balls, id));
+            state.respot = null;
+        }
+
+        // Clientes recebem a velocidade já calculada (evita divergência de Math.cos/sin entre engines)
+        sinucaIo.to(socket.room).emit('ballSync', {
+            angle: shot.angle, force: shot.force, vx, vy,
+            calledPocket: shot.calledPocket, shooter: socket.id
+        });
+
+        const roomRef = myRoom;
+        const delay = steps * SinucaPhysics.DT * 1000 + SINUCA_SYNC_MARGIN_MS;
+        roomRef.timer = setTimeout(() => {
+            roomRef.timer = null;
+            roomRef.busy = false;
+            const balls = serializeSinucaBalls(roomRef.balls);
+            if (roomRef.state.isGameOver) {
+                sinucaIo.to(roomId).emit('gameOver', { state: roomRef.state, balls });
+            } else {
+                sinucaIo.to(roomId).emit('syncState', { state: roomRef.state, balls });
+                sinucaIo.to(roomId).emit('turnChange', roomRef.players[roomRef.state.turnIndex]);
+            }
+        }, delay);
     });
 
     socket.on('disconnect', () => {
         console.log(`[-] Jogador de Sinuca desconectado: ${socket.id}`);
-        if (socket.room && sinucaRooms[socket.room]) {
-            socket.to(socket.room).emit('opponentDisconnected', 'O oponente saiu da mesa.');
+        const myRoom = sinucaRooms[socket.room];
+        if (socket.room && myRoom) {
+            if (myRoom.timer) clearTimeout(myRoom.timer);
+            const finished = myRoom.state && myRoom.state.isGameOver;
+            if (!finished) socket.to(socket.room).emit('opponentDisconnected', 'O oponente saiu da mesa.');
             delete sinucaRooms[socket.room];
         }
     });
