@@ -434,6 +434,109 @@ sinucaIo.on('connection', (socket) => {
     });
 });
 // ==========================================
+
+// ==========================================
+// CÓDIGO DO SERVIDOR DO CAMPO MINADO NAVAL
+// ==========================================
+// O servidor guarda as frotas (o cliente nunca recebe a posição dos navios do oponente
+// até o fim da partida) e valida cada tiro.
+const navalIo = io.of('/campominado');
+const NavalRules = require('./public/campominado/js/rules.js');
+let navalRooms = {};
+
+function findWaitingNavalRoom() {
+    for (const [id, room] of Object.entries(navalRooms)) {
+        if (room.players.length === 1) return id;
+    }
+    return null;
+}
+
+function startNavalPlacement(roomId) {
+    const room = navalRooms[roomId];
+    room.phase = 'placement';
+    room.boards = {};
+    room.rematch = new Set();
+    room.players.forEach(id => { room.boards[id] = null; });
+    navalIo.to(roomId).emit('placementStart', { ships: NavalRules.SHIPS, size: NavalRules.SIZE });
+}
+
+navalIo.on('connection', (socket) => {
+    console.log(`[+] Jogador do Campo Minado conectado: ${socket.id}`);
+
+    let roomId = findWaitingNavalRoom();
+    if (!roomId) {
+        roomId = generateRoomId();
+        navalRooms[roomId] = { players: [], boards: {}, phase: 'waiting', turn: null, starter: 0, rematch: new Set() };
+    }
+    const room = navalRooms[roomId];
+    room.players.push(socket.id);
+    socket.join(roomId);
+    socket.emit('playerAssigned', { number: room.players.length });
+
+    if (room.players.length === 2) startNavalPlacement(roomId);
+    else socket.emit('waitingForOpponent');
+
+    socket.on('placeShips', (placements) => {
+        const r = navalRooms[roomId];
+        if (!r || r.phase !== 'placement' || r.boards[socket.id]) return;
+        const check = NavalRules.validateFleet(placements);
+        if (!check.ok) return socket.emit('placementRejected', { reason: check.reason });
+
+        r.boards[socket.id] = NavalRules.createBoard(check.fleet);
+        socket.emit('placementAccepted');
+        socket.to(roomId).emit('opponentReady');
+
+        if (r.players.every(id => r.boards[id])) {
+            r.phase = 'battle';
+            r.turn = r.players[r.starter];
+            navalIo.to(roomId).emit('battleStart', { turn: r.turn });
+        }
+    });
+
+    socket.on('fire', (data) => {
+        const r = navalRooms[roomId];
+        if (!r || r.phase !== 'battle' || r.turn !== socket.id) return;
+        const opponent = r.players.find(id => id !== socket.id);
+        const row = Number(data && data.row), col = Number(data && data.col);
+        const shot = NavalRules.fire(r.boards[opponent], row, col);
+        if (!shot.ok) return socket.emit('shotRejected', { reason: shot.reason });
+
+        // Acertou: atira de novo. Errou: passa a vez.
+        if (shot.result === 'miss') r.turn = opponent;
+        navalIo.to(roomId).emit('shotResult', {
+            shooter: socket.id, row, col,
+            result: shot.result, adjacent: shot.adjacent, ship: shot.ship,
+            nextTurn: r.turn
+        });
+
+        if (shot.gameOver) {
+            r.phase = 'over';
+            const fleets = {};
+            r.players.forEach(id => { fleets[id] = r.boards[id].fleet.map(s => ({ type: s.type, cells: s.cells })); });
+            navalIo.to(roomId).emit('gameOver', { winner: socket.id, fleets });
+        }
+    });
+
+    socket.on('requestRematch', () => {
+        const r = navalRooms[roomId];
+        if (!r || r.phase !== 'over' || r.players.length !== 2) return;
+        r.rematch.add(socket.id);
+        socket.to(roomId).emit('opponentWantsRematch');
+        if (r.rematch.size === 2) {
+            r.starter = 1 - r.starter; // alterna quem começa
+            startNavalPlacement(roomId);
+        }
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`[-] Jogador do Campo Minado desconectado: ${socket.id}`);
+        if (navalRooms[roomId]) {
+            socket.to(roomId).emit('opponentDisconnected', 'Seu oponente saiu da partida.');
+            delete navalRooms[roomId];
+        }
+    });
+});
+// ==========================================
 const PORT = process.env.PORT || 3000;
 function getLocalIP() {
     const interfaces = os.networkInterfaces();

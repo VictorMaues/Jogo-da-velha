@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Campo Minado Naval: batalha naval multiplayer 10x10 para 2 jogadores.">
+    <link rel="stylesheet" href="style.css">
+    <title>Campo Minado Naval</title>
+</head>
+<body>
+    <main class="naval-box">
+        <header>
+            <a href="/" class="back-link" title="Voltar ao hub">←</a>
+            <h1>Campo Minado Naval</h1>
+        </header>
+
+        <div class="status" id="status">Conectando ao servidor...</div>
+
+        <!-- Fase de posicionamento -->
+        <section id="placement-panel" class="hidden">
+            <div class="placement-layout">
+                <div class="board-wrap">
+                    <h2>Posicione sua frota</h2>
+                    <div class="board" id="placement-board"></div>
+                </div>
+                <aside class="side">
+                    <h3>Embarcações</h3>
+                    <ul class="ship-list" id="ship-list"></ul>
+                    <div class="controls">
+                        <button id="rotate-btn" type="button">↻ Girar (R): <span id="orientation">Horizontal</span></button>
+                        <button id="random-btn" type="button">🎲 Aleatório</button>
+                        <button id="clear-btn" type="button">🧹 Limpar</button>
+                        <button id="confirm-btn" type="button" class="primary" disabled>✔ Confirmar frota</button>
+                    </div>
+                    <p class="hint">Clique em uma embarcação já posicionada para removê-la.</p>
+                </aside>
+            </div>
+        </section>
+
+        <!-- Fase de batalha -->
+        <section id="battle-panel" class="hidden">
+            <div class="battle-layout">
+                <div class="board-wrap">
+                    <h2>Mar inimigo <small>(clique para atirar)</small></h2>
+                    <div class="board" id="enemy-board"></div>
+                    <ul class="fleet-status" id="enemy-fleet"></ul>
+                </div>
+                <div class="board-wrap">
+                    <h2>Seu mar</h2>
+                    <div class="board" id="my-board"></div>
+                    <ul class="fleet-status" id="my-fleet"></ul>
+                </div>
+            </div>
+            <div class="legend">
+                <span><i class="sw miss"></i> Água (o número indica quantas partes de embarcação há nas 8 casas vizinhas)</span>
+                <span><i class="sw hit"></i> Acerto</span>
+                <span><i class="sw sunk"></i> Afundado</span>
+            </div>
+            <div class="after-game hidden" id="after-game">
+                <button id="rematch-inline-btn" type="button" class="primary">Pedir revanche</button>
+            </div>
+            <ol class="log" id="log"></ol>
+        </section>
+
+        <!-- Fim de jogo -->
+        <div class="overlay hidden" id="overlay">
+            <div class="overlay-card">
+                <div class="result" id="result-message"></div>
+                <button id="rematch-btn" type="button" class="primary">Pedir revanche</button>
+                <button id="view-boards-btn" type="button">Ver tabuleiros</button>
+                <a href="/" class="secondary-link">Voltar ao hub</a>
+            </div>
+        </div>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="js/rules.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
